@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>工賃明細書 生成ツール</title>
 <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -260,12 +261,15 @@ body { background: #eef2f7; font-family: 'Hiragino Kaku Gothic ProN', 'Meiryo', 
 <div id="statements"></div>
 
 <script>
-const WAGE        = 350;
-const ADDR        = '大分県大分市毛井５５３－１';
-const FACILITY    = 'ANELLA CAFE 大分店　就労継続支援B型';
-const DIRECTOR    = '平迫　孝子';
-const DOW         = ['日曜日','月曜日','火曜日','水曜日','木曜日','金曜日','土曜日'];
-const HISTORY_KEY = 'kotin_meisai_history';
+const WAGE      = 350;
+const ADDR      = '大分県大分市毛井５５３－１';
+const FACILITY  = 'ANELLA CAFE 大分店　就労継続支援B型';
+const DIRECTOR  = '平迫　孝子';
+const DOW       = ['日曜日','月曜日','火曜日','水曜日','木曜日','金曜日','土曜日'];
+
+const SUPABASE_URL = 'https://abeekodehorlwsmnhoza.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFiZWVrb2RlaG9ybHdzbW5ob3phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcxNzAzMTksImV4cCI6MjA5Mjc0NjMxOX0.ZgOB2TUuBBRNV8pejae_UOX9kXIiFb-CS7X0alRX1uU';
+const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // 現在生成中のデータ
 let currentData = null;
@@ -621,8 +625,8 @@ window.addEventListener('load', function() {
   setStatus('新しいタブで印刷ダイアログが開くっちゃ。「PDFに保存」を選んでなあ！');
 }
 
-// ===== 履歴保存 =====
-function saveCurrentToHistory() {
+// ===== 履歴保存（Supabase）=====
+async function saveCurrentToHistory() {
   if (!currentData) return;
   const { users, order } = currentData;
   const sample = users[order[0]];
@@ -630,85 +634,71 @@ function saveCurrentToHistory() {
 
   const { year, month } = sample;
   const key = `${year}-${String(month).padStart(2, '0')}`;
+  const savedAt = new Date().toLocaleDateString('ja-JP');
 
-  const history = loadAllHistory();
-  history[key] = {
-    key,
-    year,
-    month,
-    savedAt: new Date().toLocaleDateString('ja-JP'),
-    users,
-    order
-  };
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  const { error } = await db.from('kotin_history').upsert({
+    id: key, year, month, saved_at: savedAt, data: { users, order }
+  });
 
+  if (error) {
+    document.getElementById('save-msg').textContent = '保存エラーっちゃ: ' + error.message;
+    return;
+  }
   document.getElementById('save-msg').textContent = `${year}年${month}月を保存しましたっちゃ！`;
   renderHistoryList();
 }
 
-function loadAllHistory() {
-  try {
-    return JSON.parse(localStorage.getItem(HISTORY_KEY) || '{}');
-  } catch {
-    return {};
-  }
-}
-
-function renderHistoryList() {
-  const history = loadAllHistory();
-  const keys = Object.keys(history).sort().reverse();
+async function renderHistoryList() {
   const container = document.getElementById('history-list');
+  container.innerHTML = '<div id="no-history" style="color:#aaa;font-size:13px;padding:8px 0">読み込み中っちゃ...</div>';
 
-  if (keys.length === 0) {
+  const { data, error } = await db.from('kotin_history').select('id,year,month,saved_at,data').order('id', { ascending: false });
+  if (error || !data || data.length === 0) {
     container.innerHTML = '<div id="no-history">保存された履歴はまだありませんっちゃ</div>';
     return;
   }
 
-  container.innerHTML = keys.map(k => {
-    const h = history[k];
-    return `
-      <div class="hist-card">
-        <div class="hinfo">
-          ${h.year}年${h.month}月
-          <span>保存日: ${h.savedAt} / ${h.order.length}名</span>
-        </div>
-        <div class="hbtns">
-          <button class="btn-small-blue" onclick="loadHistory('${k}')">表示・印刷</button>
-          <button class="btn-small-red"  onclick="deleteHistory('${k}')">削除</button>
-        </div>
-      </div>`;
-  }).join('');
+  container.innerHTML = data.map(h => `
+    <div class="hist-card">
+      <div class="hinfo">
+        ${h.year}年${h.month}月
+        <span>保存日: ${h.saved_at} / ${h.data.order.length}名</span>
+      </div>
+      <div class="hbtns">
+        <button class="btn-small-blue" onclick="loadHistory('${h.id}')">表示・印刷</button>
+        <button class="btn-small-red"  onclick="deleteHistory('${h.id}', ${h.year}, ${h.month})">削除</button>
+      </div>
+    </div>`).join('');
 }
 
-function loadHistory(key) {
-  const history = loadAllHistory();
-  const entry   = history[key];
-  if (!entry) return;
-  currentData = { users: entry.users, order: entry.order };
+async function loadHistory(key) {
+  const { data, error } = await db.from('kotin_history').select('year,month,data').eq('id', key).single();
+  if (error || !data) return;
+  currentData = { users: data.data.users, order: data.data.order };
   document.getElementById('save-msg').textContent = '';
   render(currentData);
   window.scrollTo({ top: 0, behavior: 'smooth' });
-  setStatus(`📂 ${entry.year}年${entry.month}月の履歴を読み込みましたっちゃ`);
+  setStatus(`📂 ${data.year}年${data.month}月の履歴を読み込みましたっちゃ`);
 }
 
-function deleteHistory(key) {
-  const history = loadAllHistory();
-  const entry   = history[key];
-  if (!entry) return;
-  if (!confirm(`${entry.year}年${entry.month}月の履歴を削除しますか？`)) return;
-  delete history[key];
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+async function deleteHistory(key, year, month) {
+  if (!confirm(`${year}年${month}月の履歴を削除しますか？`)) return;
+  await db.from('kotin_history').delete().eq('id', key);
   renderHistoryList();
 }
 
 // ===== 履歴エクスポート / インポート =====
-function exportHistory() {
-  const history = loadAllHistory();
-  if (Object.keys(history).length === 0) {
+async function exportHistory() {
+  const { data, error } = await db.from('kotin_history').select('*').order('id');
+  if (error || !data || data.length === 0) {
     document.getElementById('transfer-msg').textContent = '保存された履歴がありませんっちゃ';
     return;
   }
-  const blob = new Blob([JSON.stringify(history, null, 2)], { type: 'application/json' });
+  const out = {};
+  data.forEach(h => {
+    out[h.id] = { key: h.id, year: h.year, month: h.month, savedAt: h.saved_at, ...h.data };
+  });
+  const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `kotin_history_${new Date().toISOString().slice(0,10)}.json`;
@@ -716,20 +706,22 @@ function exportHistory() {
   document.getElementById('transfer-msg').textContent = 'エクスポートしたっちゃ！';
 }
 
-function importHistory(input) {
+async function importHistory(input) {
   const file = input.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = e => {
+  reader.onload = async e => {
     try {
       const imported = JSON.parse(e.target.result);
-      const existing = loadAllHistory();
-      const merged = Object.assign({}, existing, imported);
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(merged));
+      const rows = Object.entries(imported).map(([id, h]) => ({
+        id, year: h.year, month: h.month, saved_at: h.savedAt,
+        data: { users: h.users, order: h.order }
+      }));
+      const { error } = await db.from('kotin_history').upsert(rows);
+      if (error) throw error;
       input.value = '';
       renderHistoryList();
-      document.getElementById('transfer-msg').textContent =
-        `${Object.keys(imported).length}件の履歴をインポートしたっちゃ！`;
+      document.getElementById('transfer-msg').textContent = `${rows.length}件インポートしたっちゃ！`;
     } catch {
       document.getElementById('transfer-msg').textContent = 'ファイルの読み込みに失敗したっちゃ';
     }
