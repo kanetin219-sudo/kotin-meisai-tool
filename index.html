@@ -562,7 +562,6 @@ function downloadPdf() {
   const { year, month } = sample;
 
   const stmtsHtml = document.getElementById('statements').innerHTML;
-  const styleText = document.querySelector('style').textContent;
 
   const fullHtml = `<!DOCTYPE html>
 <html lang="ja">
@@ -570,8 +569,36 @@ function downloadPdf() {
 <meta charset="UTF-8">
 <title>工賃明細書_${year}年${month}月</title>
 <style>
-${styleText}
-body { background: white !important; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: white; }
+@page { size: A4 portrait; margin: 0; }
+.stmt {
+  width: 210mm; min-height: 297mm; padding: 10mm 13mm 8mm;
+  background: white; font-family: 'Hiragino Mincho ProN', 'MS Mincho', 'Yu Mincho', serif;
+  font-size: 8.5pt; color: #000; page-break-after: always;
+}
+.stmt:last-child { page-break-after: auto; }
+.stmt-title { text-align: center; font-size: 16pt; font-weight: bold; margin-bottom: 5mm; letter-spacing: 6px; }
+.stmt-header { display: flex; align-items: center; gap: 3px; font-size: 11pt; margin-bottom: 4mm; }
+.stmt-header .hbox { border: 1px solid #000; padding: 2px 8px; min-width: 38px; text-align: center; font-size: 12pt; }
+.stmt-header .spacer { flex: 1; }
+.stmt-name { text-align: center; font-size: 13pt; margin-bottom: 5mm; letter-spacing: 3px; }
+.stmt-table { width: 100%; border-collapse: collapse; margin-bottom: 3mm; }
+.stmt-table th, .stmt-table td { border: 0.5pt solid #000; padding: 1px 2px; text-align: center; white-space: nowrap; height: 5.3mm; line-height: 1.15; font-size: 7.8pt; }
+.stmt-table th { background: #efefef; font-weight: bold; font-size: 8pt; }
+.stmt-table td.r { text-align: right; padding-right: 4px; }
+.stmt-table td.l { text-align: left; padding-left: 4px; }
+.stmt-table td.dim { color: #bbb; }
+.stmt-table .sp-row td { background: #f7f7f7; font-size: 7.5pt; }
+.stmt-summary { width: 58%; margin-left: auto; border-collapse: collapse; margin-bottom: 5mm; }
+.stmt-summary td { border: 0.5pt solid #000; padding: 2px 6px; font-size: 8.5pt; }
+.stmt-summary td.lbl { background: #efefef; font-weight: bold; width: 42%; }
+.stmt-summary td.val { text-align: right; }
+.stmt-summary .total-row td { font-weight: bold; font-size: 9.5pt; }
+.cert { font-size: 8.5pt; margin-bottom: 5mm; }
+.footer-info { font-size: 8.5pt; line-height: 2; }
+.sign-row { margin-top: 6mm; display: flex; align-items: flex-end; gap: 6mm; font-size: 10pt; }
+.sign-underline { flex: 1; border-bottom: 0.5pt solid #000; min-width: 60mm; }
 </style>
 </head>
 <body>
@@ -591,7 +618,7 @@ window.addEventListener('load', function() {
     alert('ポップアップがブロックされとるっちゃ！\nブラウザのアドレスバー右側でポップアップを許可してなあ。');
   }
   setTimeout(() => URL.revokeObjectURL(url), 60000);
-  setStatus(`✅ 新しいタブで印刷ダイアログが開くっちゃ。「PDFに保存」を選んでなあ！`);
+  setStatus('新しいタブで印刷ダイアログが開くっちゃ。「PDFに保存」を選んでなあ！');
 }
 
 // ===== 履歴保存 =====
