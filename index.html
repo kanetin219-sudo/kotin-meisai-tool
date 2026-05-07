@@ -567,8 +567,13 @@ async function downloadPdf() {
   btn.textContent = '⏳ 生成中...';
   setStatus('PDF生成中っちゃ、少し待っとってなあ...');
 
+  // display:none の要素はレイアウト計算されないため、画面外に複製して処理
   const stmts = document.getElementById('statements');
-  stmts.style.display = 'block';
+  const clone = stmts.cloneNode(true);
+  clone.style.cssText = 'position:fixed;left:-9999px;top:0;display:block;width:210mm;';
+  document.body.appendChild(clone);
+
+  await new Promise(resolve => setTimeout(resolve, 300));
 
   const opt = {
     margin: 0,
@@ -580,13 +585,13 @@ async function downloadPdf() {
   };
 
   try {
-    await html2pdf().set(opt).from(stmts).save();
+    await html2pdf().set(opt).from(clone).save();
     setStatus(`✅ ${order.length}名分のPDFをダウンロードしたっちゃ！`);
   } catch (err) {
     setStatus('エラー: PDFの生成に失敗したっちゃ: ' + err.message);
     console.error(err);
   } finally {
-    stmts.style.display = 'none';
+    document.body.removeChild(clone);
     btn.disabled = false;
     btn.textContent = '📥 PDFダウンロード';
   }
