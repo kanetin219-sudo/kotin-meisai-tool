@@ -567,13 +567,17 @@ async function downloadPdf() {
   btn.textContent = '⏳ 生成中...';
   setStatus('PDF生成中っちゃ、少し待っとってなあ...');
 
-  // display:none の要素はレイアウト計算されないため、画面外に複製して処理
-  const stmts = document.getElementById('statements');
-  const clone = stmts.cloneNode(true);
-  clone.style.cssText = 'position:fixed;left:-9999px;top:0;display:block;width:210mm;';
-  document.body.appendChild(clone);
+  // html2canvasはビューポート外・非表示要素を描画できないため
+  // オーバーレイで画面を隠しつつ statements を画面内に表示してレンダリング
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(26,82,118,0.95);z-index:9999;display:flex;align-items:center;justify-content:center;color:white;font-size:18px;font-family:sans-serif;';
+  overlay.textContent = 'PDF生成中... しばらくお待ちくださいっちゃ';
+  document.body.appendChild(overlay);
 
-  await new Promise(resolve => setTimeout(resolve, 300));
+  const stmts = document.getElementById('statements');
+  stmts.style.display = 'block';
+
+  await new Promise(resolve => setTimeout(resolve, 500));
 
   const opt = {
     margin: 0,
@@ -585,13 +589,14 @@ async function downloadPdf() {
   };
 
   try {
-    await html2pdf().set(opt).from(clone).save();
+    await html2pdf().set(opt).from(stmts).save();
     setStatus(`✅ ${order.length}名分のPDFをダウンロードしたっちゃ！`);
   } catch (err) {
     setStatus('エラー: PDFの生成に失敗したっちゃ: ' + err.message);
     console.error(err);
   } finally {
-    document.body.removeChild(clone);
+    stmts.style.display = 'none';
+    document.body.removeChild(overlay);
     btn.disabled = false;
     btn.textContent = '📥 PDFダウンロード';
   }
