@@ -244,6 +244,7 @@ body { background: #eef2f7; font-family: 'Hiragino Kaku Gothic ProN', 'Meiryo', 
     <button class="btn-orange" onclick="exportHistory()">📤 履歴をエクスポート</button>
     <button class="btn-orange" onclick="document.getElementById('import-file').click()">📥 履歴をインポート</button>
     <input type="file" id="import-file" accept=".json" onchange="importHistory(this)">
+    <button class="btn-orange" onclick="migrateFromLocalStorage()" id="btn-migrate" title="このブラウザに残っている旧データをクラウドへ移行">🔄 旧データを移行</button>
     <span id="transfer-msg"></span>
   </div>
 </div>
@@ -727,6 +728,33 @@ async function importHistory(input) {
     }
   };
   reader.readAsText(file);
+}
+
+// ===== localStorage → Supabase 移行 =====
+async function migrateFromLocalStorage() {
+  const raw = localStorage.getItem('kotin_meisai_history');
+  if (!raw) {
+    document.getElementById('transfer-msg').textContent = 'このブラウザに旧データはなかったっちゃ';
+    return;
+  }
+  try {
+    const old = JSON.parse(raw);
+    const keys = Object.keys(old);
+    if (keys.length === 0) {
+      document.getElementById('transfer-msg').textContent = 'このブラウザに旧データはなかったっちゃ';
+      return;
+    }
+    const rows = keys.map(id => {
+      const h = old[id];
+      return { id, year: h.year, month: h.month, saved_at: h.savedAt, data: { users: h.users, order: h.order } };
+    });
+    const { error } = await db.from('kotin_history').upsert(rows);
+    if (error) throw error;
+    document.getElementById('transfer-msg').textContent = `✅ ${keys.length}件をクラウドへ移行したっちゃ！`;
+    renderHistoryList();
+  } catch (e) {
+    document.getElementById('transfer-msg').textContent = '移行エラーっちゃ: ' + e.message;
+  }
 }
 
 // ページ読み込み時に履歴表示
