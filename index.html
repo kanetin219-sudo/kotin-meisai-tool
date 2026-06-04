@@ -238,7 +238,9 @@ body { background: #eef2f7; font-family: 'Hiragino Kaku Gothic ProN', 'Meiryo', 
     <button class="btn-green" onclick="window.print()">全員分をPDF印刷</button>
     <button class="btn-purple" id="btn-pdf-dl" onclick="downloadPdf()">📥 PDFダウンロード</button>
     <button class="btn-blue" onclick="saveCurrentToHistory()">この月を履歴に保存</button>
+    <button class="btn-orange" id="btn-finance-sync" onclick="syncToFinance()">💴 収支表に反映</button>
     <span id="save-msg"></span>
+    <span id="finance-msg"></span>
   </div>
   <div id="transfer-bar">
     <button class="btn-orange" onclick="exportHistory()">📤 履歴をエクスポート</button>
@@ -274,6 +276,7 @@ const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // 現在生成中のデータ
 let currentData = null;
+let currentTotal = 0; // 画面に表示している月合計工賃
 
 // ===== ファイル読み込み =====
 const dz = document.getElementById('drop-zone');
@@ -527,35 +530,82 @@ function buildStatement(user) {
 </div>`;
 }
 
+// ===== 各利用者の工賃計算（共通）=====
+function calcAmt(u) {
+  let totalMins = 0;
+  for (const r of Object.values(u.records)) {
+    const startSnapped = applyStartGrace(r.start);
+    const endRounded   = roundEndTime15(r.end);
+    const workRaw      = Math.max(0, toMinutes(endRounded) - toMinutes(startSnapped) - toMinutes(r.brk));
+    totalMins += roundDown15(workRaw);
+  }
+  return Math.round(totalMins / 60 * WAGE);
+}
+
 // ===== 画面に反映 =====
 function render({ users, order }) {
-  document.getElementById('statements').innerHTML =
-    order.map(n => buildStatement(users[n])).join('');
-
-  const cards = order.map(n => {
-    const u = users[n];
-    let totalMins = 0;
-    for (const r of Object.values(u.records)) {
-      const startSnapped = applyStartGrace(r.start);
-      const endRounded   = roundEndTime15(r.end);
-      const workRaw      = Math.max(0, toMinutes(endRounded) - toMinutes(startSnapped) - toMinutes(r.brk));
-      totalMins += roundDown15(workRaw);
-    }
-    const amt = Math.round(totalMins / 60 * WAGE);
-    return `<div class="card">
-      <span class="uname">${n}</span>
-      <span class="uamt">工賃総額: ${fmtYen(amt)}</span>
-    </div>`;
-  }).join('');
-
   const sample = users[order[0]];
-  const label  = sample ? `${sample.year}年${sample.month}月` : '';
+  const { year, month } = sample;
 
+  // 個別金額と合計を計算
+  const amts = {};
+  currentTotal = 0;
+  for (const n of order) {
+    amts[n] = calcAmt(users[n]);
+    currentTotal += amts[n];
+  }
+
+  // 印刷用：明細書＋月合計サマリページ
+  document.getElementById('statements').innerHTML =
+    order.map(n => buildStatement(users[n])).join('') +
+    buildSummaryPage(year, month, order, amts, currentTotal);
+
+  // 画面カード
+  const cards = order.map(n =>
+    `<div class="card">
+      <span class="uname">${n}</span>
+      <span class="uamt">工賃総額: ${fmtYen(amts[n])}</span>
+    </div>`
+  ).join('');
+
+  const totalCard = `<div class="card" style="background:#1a5276;color:white;margin-top:8px;">
+    <span class="uname" style="color:white;">月合計</span>
+    <span class="uamt" style="color:#f9e79f;font-size:16px;font-weight:bold;">${fmtYen(currentTotal)}</span>
+  </div>`;
+
+  const label = `${year}年${month}月`;
   document.getElementById('result-area').innerHTML =
-    `<h2>${label}　${order.length}名分の明細書が生成されました</h2>${cards}`;
+    `<h2>${label}　${order.length}名分の明細書が生成されました</h2>${cards}${totalCard}`;
 
   document.getElementById('action-bar').style.display = 'flex';
-  setStatus(`✅ ${order.length}名分を生成しました。「全員分をPDF印刷」で印刷できます。`);
+  setStatus(`✅ ${order.length}名分を生成しました。月合計: ${fmtYen(currentTotal)}`);
+}
+
+// ===== 月合計サマリページ（印刷用）=====
+function buildSummaryPage(year, month, order, amts, total) {
+  const rows = order.map(n =>
+    `<tr><td style="text-align:left;padding:3px 8px;">${n}</td><td style="text-align:right;padding:3px 8px;">${fmtYen(amts[n])}</td></tr>`
+  ).join('');
+  return `
+<div class="stmt" style="font-family:'Hiragino Kaku Gothic ProN','Meiryo',sans-serif;">
+  <div class="stmt-title" style="margin-bottom:8mm;">工賃支払一覧</div>
+  <div style="text-align:center;font-size:13pt;margin-bottom:6mm;">${year}年${month}月分</div>
+  <table style="width:60%;margin:0 auto;border-collapse:collapse;font-size:10pt;">
+    <thead>
+      <tr style="background:#efefef;">
+        <th style="border:0.5pt solid #000;padding:4px 8px;text-align:left;">氏名</th>
+        <th style="border:0.5pt solid #000;padding:4px 8px;text-align:right;">工賃</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows}
+      <tr style="font-weight:bold;font-size:11pt;border-top:1pt solid #000;">
+        <td style="border:0.5pt solid #000;padding:5px 8px;text-align:left;background:#efefef;">合計</td>
+        <td style="border:0.5pt solid #000;padding:5px 8px;text-align:right;background:#efefef;">${fmtYen(total)}</td>
+      </tr>
+    </tbody>
+  </table>
+</div>`;
 }
 
 // ===== PDFダウンロード =====
@@ -659,17 +709,21 @@ async function renderHistoryList() {
     return;
   }
 
-  container.innerHTML = data.map(h => `
+  container.innerHTML = data.map(h => {
+    const total = h.data.order.reduce((sum, n) => sum + calcAmt(h.data.users[n]), 0);
+    return `
     <div class="hist-card">
       <div class="hinfo">
         ${h.year}年${h.month}月
         <span>保存日: ${h.saved_at} / ${h.data.order.length}名</span>
+        <span style="color:#1a5276;font-weight:bold;margin-left:10px;">月合計: ${fmtYen(total)}</span>
       </div>
       <div class="hbtns">
         <button class="btn-small-blue" onclick="loadHistory('${h.id}')">表示・印刷</button>
         <button class="btn-small-red"  onclick="deleteHistory('${h.id}', ${h.year}, ${h.month})">削除</button>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 async function loadHistory(key) {
@@ -754,6 +808,42 @@ async function migrateFromLocalStorage() {
     renderHistoryList();
   } catch (e) {
     document.getElementById('transfer-msg').textContent = '移行エラーっちゃ: ' + e.message;
+  }
+}
+
+// ===== 収支表（anella_monthly_finance）へ工賃合計を反映 =====
+async function syncToFinance() {
+  if (!currentData || currentTotal === 0) return;
+  const { users, order } = currentData;
+  const sample = users[order[0]];
+  if (!sample) return;
+  const { year, month } = sample;
+
+  const totalAmt = currentTotal; // 画面に表示済みの合計をそのまま使う
+
+  // 工賃は翌月払いなので、Excelの翌月を収支表に反映する
+  const payDate = new Date(year, month, 1); // month は0始まりなので +1 = 翌月
+  const payYear  = payDate.getFullYear();
+  const payMonth = payDate.getMonth() + 1;
+  const yearMonth = `${payYear}-${String(payMonth).padStart(2, '0')}`;
+  const btn = document.getElementById('btn-finance-sync');
+  const msg = document.getElementById('finance-msg');
+  btn.disabled = true;
+  msg.textContent = '反映中...';
+  msg.style.color = '#f9e79f';
+
+  const { error } = await db.from('anella_monthly_finance').upsert(
+    { year_month: yearMonth, roshu_kocho: totalAmt, updated_at: new Date().toISOString() },
+    { onConflict: 'year_month' }
+  );
+
+  btn.disabled = false;
+  if (error) {
+    msg.textContent = '❌ 反映失敗: ' + error.message;
+    msg.style.color = '#ff6b6b';
+  } else {
+    msg.textContent = `✅ ${year}年${month}月分の工賃 ¥${totalAmt.toLocaleString()} を${payYear}年${payMonth}月の収支表に反映したっちゃ！`;
+    msg.style.color = '#a9dfbf';
   }
 }
 
