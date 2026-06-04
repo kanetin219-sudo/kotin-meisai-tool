@@ -724,7 +724,7 @@ async function saveCurrentToHistory() {
   const savedAt = new Date().toLocaleDateString('ja-JP');
 
   const { error } = await db.from('kotin_history').upsert({
-    id: key, year, month, saved_at: savedAt, data: { users, order }
+    id: key, year, month, saved_at: savedAt, data: { users, order, overrides }
   });
 
   if (error) {
@@ -766,6 +766,7 @@ async function loadHistory(key) {
   const { data, error } = await db.from('kotin_history').select('year,month,data').eq('id', key).single();
   if (error || !data) return;
   currentData = { users: data.data.users, order: data.data.order };
+  overrides = data.data.overrides || {};
   document.getElementById('save-msg').textContent = '';
   render(currentData);
   window.scrollTo({ top: 0, behavior: 'smooth' });
