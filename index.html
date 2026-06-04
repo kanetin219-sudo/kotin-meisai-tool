@@ -473,7 +473,7 @@ function buildStatement(user) {
     const rec = records[d];
 
     let cols;
-    if (rec && (rec.total || rec.start)) {
+    if (rec) {
       const startSnapped = applyStartGrace(rec.start);
       const endRounded   = roundEndTime15(rec.end);
       const uOvr = overrides[name] || {};
@@ -481,13 +481,21 @@ function buildStatement(user) {
       const amt  = Math.round(mins / 60 * WAGE);
       totalMins += mins;
       totalAmt  += amt;
-      cols = `
-        <td>${startSnapped}</td>
-        <td>${endRounded}</td>
-        <td>${rec.brk}</td>
-        <td class="r">${fmtHours(mins)}${uOvr[d] !== undefined ? ' ✏️' : ''}</td>
-        <td class="r">${fmtYen(amt)}</td>
-        <td></td>`;
+      if (mins > 0) {
+        cols = `
+          <td>${startSnapped}</td>
+          <td>${endRounded}</td>
+          <td>${rec.brk}</td>
+          <td class="r">${fmtHours(mins)}${uOvr[d] !== undefined ? ' ✏️' : ''}</td>
+          <td class="r">${fmtYen(amt)}</td>
+          <td></td>`;
+      } else {
+        cols = `
+          <td></td><td></td><td></td>
+          <td class="r dim">0.0</td>
+          <td class="r dim">¥0</td>
+          <td></td>`;
+      }
     } else {
       cols = `
         <td></td><td></td><td></td>
@@ -560,6 +568,7 @@ function buildStatement(user) {
 
 // ===== 1日分の計算（分）=====
 function calcDayMins(r) {
+  if (!r.start) return 0; // 作業開始時間が未入力なら0分
   const startSnapped = applyStartGrace(r.start);
   const endRounded   = roundEndTime15(r.end);
   const workRaw      = Math.max(0, toMinutes(endRounded) - toMinutes(startSnapped) - toMinutes(r.brk));
@@ -893,7 +902,7 @@ function openAdjustModal(name) {
 
   const rows = Object.entries(u.records)
     .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
-    .filter(([, r]) => r.total || r.start)
+    .filter(([, r]) => r.end || r.start || r.total)
     .map(([dayStr, r]) => {
       const day  = parseInt(dayStr);
       const mins = (uOvr[day] !== undefined) ? uOvr[day] : calcDayMins(r);
@@ -916,7 +925,7 @@ function bulkSet() {
   if (isNaN(hours) || hours < 0) return;
   const u = currentData.users[adjustingName];
   Object.entries(u.records)
-    .filter(([, r]) => r.total || r.start)
+    .filter(([, r]) => r.end || r.start || r.total)
     .forEach(([dayStr]) => {
       const el = document.getElementById('adj-' + dayStr);
       if (el) el.value = hours.toFixed(2);
@@ -927,7 +936,7 @@ function applyAdjust() {
   const u = currentData.users[adjustingName];
   overrides[adjustingName] = overrides[adjustingName] || {};
   Object.entries(u.records)
-    .filter(([, r]) => r.total || r.start)
+    .filter(([, r]) => r.end || r.start || r.total)
     .forEach(([dayStr]) => {
       const day = parseInt(dayStr);
       const el  = document.getElementById('adj-' + day);
