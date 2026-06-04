@@ -208,6 +208,14 @@ body { background: #eef2f7; font-family: 'Hiragino Kaku Gothic ProN', 'Meiryo', 
 }
 .sign-underline { flex: 1; border-bottom: 0.5pt solid #000; min-width: 60mm; }
 
+/* ===== 修正ボタン ===== */
+.btn-adjust {
+  background: #f39c12; color: white; border: none;
+  padding: 5px 12px; border-radius: 4px; font-size: 12px;
+  cursor: pointer; white-space: nowrap;
+}
+.btn-adjust:hover { background: #d68910; }
+
 /* ===== 印刷 ===== */
 @media print {
   @page { size: A4 portrait; margin: 0; }
@@ -263,6 +271,25 @@ body { background: #eef2f7; font-family: 'Hiragino Kaku Gothic ProN', 'Meiryo', 
 <!-- ===== 印刷用明細書 ===== -->
 <div id="statements"></div>
 
+<!-- ===== 時間修正モーダル ===== -->
+<div id="adjust-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:1000; justify-content:center; align-items:center;">
+  <div style="background:white; border-radius:12px; padding:24px 28px; min-width:320px; max-width:440px; max-height:80vh; overflow-y:auto; box-shadow:0 8px 32px rgba(0,0,0,0.25);">
+    <div id="adjust-title" style="font-size:16px; font-weight:bold; color:#1a5276; margin-bottom:14px;"></div>
+    <div style="margin-bottom:14px; padding:10px 14px; background:#f0f4f8; border-radius:8px; font-size:13px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+      <span>全日を</span>
+      <input type="number" id="bulk-hours" step="0.25" min="0" max="12"
+        style="width:65px; padding:4px 6px; border:1px solid #ccc; border-radius:4px; text-align:center; font-size:13px;">
+      <span>時間に一括設定</span>
+      <button onclick="bulkSet()" style="padding:5px 14px; background:#2e86c1; color:white; border:none; border-radius:4px; cursor:pointer; font-size:12px; font-weight:bold;">設定</button>
+    </div>
+    <div id="adjust-days" style="display:flex; flex-direction:column; gap:4px;"></div>
+    <div style="margin-top:18px; display:flex; gap:10px;">
+      <button onclick="applyAdjust()" style="flex:1; padding:11px; background:#27ae60; color:white; border:none; border-radius:8px; font-size:14px; font-weight:bold; cursor:pointer;">✅ 適用して再計算</button>
+      <button onclick="closeAdjustModal()" style="padding:11px 20px; background:#eee; color:#555; border:none; border-radius:8px; font-size:14px; cursor:pointer;">キャンセル</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const WAGE      = 350;
 const ADDR      = '大分県大分市毛井５５３－１';
@@ -276,7 +303,9 @@ const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // 現在生成中のデータ
 let currentData = null;
-let currentTotal = 0; // 画面に表示している月合計工賃
+let currentTotal = 0;
+let overrides = {};       // { [name]: { [day]: mins } } 手動上書き
+let adjustingName = null;
 
 // ===== ファイル読み込み =====
 const dz = document.getElementById('drop-zone');
@@ -444,20 +473,19 @@ function buildStatement(user) {
     const rec = records[d];
 
     let cols;
-    if (rec && rec.total) {
-      // ①開始時刻：5分以内なら区切りにスナップ ②終了時刻：15分切り捨て ③さらに15分切り捨て
+    if (rec && (rec.total || rec.start)) {
       const startSnapped = applyStartGrace(rec.start);
       const endRounded   = roundEndTime15(rec.end);
-      const workRaw      = Math.max(0, toMinutes(endRounded) - toMinutes(startSnapped) - toMinutes(rec.brk));
-      const mins         = roundDown15(workRaw);
-      const amt          = Math.round(mins / 60 * WAGE);
+      const uOvr = overrides[name] || {};
+      const mins = (uOvr[d] !== undefined) ? uOvr[d] : calcDayMins(rec);
+      const amt  = Math.round(mins / 60 * WAGE);
       totalMins += mins;
       totalAmt  += amt;
       cols = `
         <td>${startSnapped}</td>
         <td>${endRounded}</td>
         <td>${rec.brk}</td>
-        <td class="r">${fmtHours(mins)}</td>
+        <td class="r">${fmtHours(mins)}${uOvr[d] !== undefined ? ' ✏️' : ''}</td>
         <td class="r">${fmtYen(amt)}</td>
         <td></td>`;
     } else {
@@ -530,14 +558,21 @@ function buildStatement(user) {
 </div>`;
 }
 
+// ===== 1日分の計算（分）=====
+function calcDayMins(r) {
+  const startSnapped = applyStartGrace(r.start);
+  const endRounded   = roundEndTime15(r.end);
+  const workRaw      = Math.max(0, toMinutes(endRounded) - toMinutes(startSnapped) - toMinutes(r.brk));
+  return roundDown15(workRaw);
+}
+
 // ===== 各利用者の工賃計算（共通）=====
 function calcAmt(u) {
   let totalMins = 0;
-  for (const r of Object.values(u.records)) {
-    const startSnapped = applyStartGrace(r.start);
-    const endRounded   = roundEndTime15(r.end);
-    const workRaw      = Math.max(0, toMinutes(endRounded) - toMinutes(startSnapped) - toMinutes(r.brk));
-    totalMins += roundDown15(workRaw);
+  const uOvr = overrides[u.name] || {};
+  for (const [dayStr, r] of Object.entries(u.records)) {
+    const day = parseInt(dayStr, 10);
+    totalMins += (uOvr[day] !== undefined) ? uOvr[day] : calcDayMins(r);
   }
   return Math.round(totalMins / 60 * WAGE);
 }
@@ -565,6 +600,7 @@ function render({ users, order }) {
     `<div class="card">
       <span class="uname">${n}</span>
       <span class="uamt">工賃総額: ${fmtYen(amts[n])}</span>
+      <button class="btn-adjust" onclick="openAdjustModal('${n.replace(/'/g, "\\'")}')">✏️ 修正</button>
     </div>`
   ).join('');
 
@@ -845,6 +881,68 @@ async function syncToFinance() {
     msg.textContent = `✅ ${year}年${month}月分の工賃 ¥${totalAmt.toLocaleString()} を${payYear}年${payMonth}月の収支表に反映したっちゃ！`;
     msg.style.color = '#a9dfbf';
   }
+}
+
+// ===== 時間修正モーダル =====
+function openAdjustModal(name) {
+  adjustingName = name;
+  const u = currentData.users[name];
+  const uOvr = overrides[name] || {};
+  document.getElementById('adjust-title').textContent = name + ' さんの作業時間修正';
+
+  const rows = Object.entries(u.records)
+    .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
+    .filter(([, r]) => r.total || r.start)
+    .map(([dayStr, r]) => {
+      const day  = parseInt(dayStr);
+      const mins = (uOvr[day] !== undefined) ? uOvr[day] : calcDayMins(r);
+      const hrs  = (mins / 60).toFixed(2);
+      const edited = uOvr[day] !== undefined ? ' style="background:#fff8e1;"' : '';
+      return `<div style="display:flex; align-items:center; gap:8px; padding:5px 0; border-bottom:1px solid #eee;"${edited}>
+        <span style="width:36px; font-size:13px; color:#555;">${day}日</span>
+        <input type="number" id="adj-${day}" step="0.25" min="0" max="12" value="${hrs}"
+          style="width:72px; padding:4px 6px; border:1px solid #bbb; border-radius:4px; text-align:center; font-size:13px;">
+        <span style="font-size:12px; color:#888;">時間</span>
+      </div>`;
+    }).join('');
+
+  document.getElementById('adjust-days').innerHTML = rows;
+  document.getElementById('adjust-modal').style.display = 'flex';
+}
+
+function bulkSet() {
+  const hours = parseFloat(document.getElementById('bulk-hours').value);
+  if (isNaN(hours) || hours < 0) return;
+  const u = currentData.users[adjustingName];
+  Object.entries(u.records)
+    .filter(([, r]) => r.total || r.start)
+    .forEach(([dayStr]) => {
+      const el = document.getElementById('adj-' + dayStr);
+      if (el) el.value = hours.toFixed(2);
+    });
+}
+
+function applyAdjust() {
+  const u = currentData.users[adjustingName];
+  overrides[adjustingName] = overrides[adjustingName] || {};
+  Object.entries(u.records)
+    .filter(([, r]) => r.total || r.start)
+    .forEach(([dayStr]) => {
+      const day = parseInt(dayStr);
+      const el  = document.getElementById('adj-' + day);
+      if (!el) return;
+      const hours = parseFloat(el.value);
+      if (!isNaN(hours) && hours >= 0) {
+        overrides[adjustingName][day] = Math.round(hours * 60);
+      }
+    });
+  closeAdjustModal();
+  render(currentData);
+}
+
+function closeAdjustModal() {
+  document.getElementById('adjust-modal').style.display = 'none';
+  adjustingName = null;
 }
 
 // ページ読み込み時に履歴表示
