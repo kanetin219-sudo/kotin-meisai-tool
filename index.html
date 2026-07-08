@@ -216,6 +216,58 @@ body { background: #eef2f7; font-family: 'Hiragino Kaku Gothic ProN', 'Meiryo', 
 }
 .btn-adjust:hover { background: #d68910; }
 
+/* ===== 時給設定パネル ===== */
+#wage-config-panel {
+  background: rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-top: 14px;
+}
+#wage-config-toggle {
+  background: none; border: none; color: white;
+  font-size: 13px; cursor: pointer; padding: 0;
+  font-weight: bold; display: flex; align-items: center; gap: 4px;
+}
+#wage-config-body { margin-top: 12px; font-size: 13px; }
+#wage-config-body label { font-size: 12px; opacity: 0.85; margin-right: 6px; }
+#wage-config-body input[type="number"],
+#wage-config-body input[type="month"] {
+  padding: 4px 6px; border: 1px solid rgba(255,255,255,0.3);
+  border-radius: 4px; font-size: 13px;
+  background: rgba(255,255,255,0.95); color: #222;
+}
+#wage-overrides-list {
+  margin: 8px 0; max-height: 220px; overflow-y: auto;
+  background: rgba(0,0,0,0.15); border-radius: 4px; padding: 4px 8px;
+}
+.wage-override-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 5px 0; font-size: 13px;
+  border-bottom: 1px solid rgba(255,255,255,0.12);
+}
+.wage-override-row:last-child { border-bottom: none; }
+.wage-override-row .wo-key { font-weight: bold; min-width: 80px; }
+.wage-override-row .wo-val { color: #f9e79f; }
+.btn-remove-wage {
+  background: rgba(231,76,60,0.85); color: white; border: none;
+  padding: 3px 10px; border-radius: 4px; cursor: pointer;
+  font-size: 11px; margin-left: auto;
+}
+.btn-remove-wage:hover { background: #c0392b; }
+.btn-add-wage {
+  background: white; color: #1a5276; border: none;
+  padding: 4px 12px; border-radius: 4px; font-size: 12px;
+  cursor: pointer; font-weight: bold;
+}
+.btn-save-wage {
+  background: #27ae60; color: white; border: none;
+  padding: 6px 18px; border-radius: 4px; cursor: pointer;
+  font-size: 13px; font-weight: bold; margin-top: 10px;
+}
+.btn-save-wage:hover { background: #1e8449; }
+#wage-msg { font-size: 12px; margin-left: 10px; color: #a9dfbf; }
+.wage-no-overrides { opacity: 0.6; font-size: 12px; padding: 4px 0; }
+
 /* ===== 印刷 ===== */
 @media print {
   @page { size: A4 portrait; margin: 0; }
@@ -257,6 +309,31 @@ body { background: #eef2f7; font-family: 'Hiragino Kaku Gothic ProN', 'Meiryo', 
     <button class="btn-orange" onclick="migrateFromLocalStorage()" id="btn-migrate" title="このブラウザに残っている旧データをクラウドへ移行">🔄 旧データを移行</button>
     <span id="transfer-msg"></span>
   </div>
+  <div id="wage-config-panel">
+    <button id="wage-config-toggle" onclick="toggleWageConfig()">
+      <span id="wage-config-arrow">▼</span> ⚙️ 時給設定
+    </button>
+    <div id="wage-config-body" style="display:none;">
+      <div style="margin-bottom:14px;">
+        <label>デフォルト時給:</label>
+        <input type="number" id="wage-default" min="0" step="1" style="width:100px;"> 円
+      </div>
+      <div>
+        <label style="display:block;margin-bottom:6px;">月別上書き（年月ごとに時給を設定）</label>
+        <div id="wage-overrides-list"></div>
+        <div style="margin-top:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          <input type="month" id="wage-add-month" style="width:150px;">
+          <input type="number" id="wage-add-value" placeholder="時給" min="0" step="1" style="width:90px;">
+          <span style="font-size:12px;opacity:0.85;">円</span>
+          <button class="btn-add-wage" onclick="addWageOverride()">＋ 追加</button>
+        </div>
+      </div>
+      <div style="margin-top:10px;">
+        <button class="btn-save-wage" onclick="saveWageSettings()">💾 設定を保存</button>
+        <span id="wage-msg"></span>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- ===== 生成結果プレビュー ===== -->
@@ -291,7 +368,6 @@ body { background: #eef2f7; font-family: 'Hiragino Kaku Gothic ProN', 'Meiryo', 
 </div>
 
 <script>
-const WAGE      = 350;
 const ADDR      = '大分県大分市毛井５５３－１';
 const FACILITY  = 'ANELLA CAFE 大分店　就労継続支援B型';
 const DIRECTOR  = '平迫　孝子';
@@ -306,6 +382,36 @@ let currentData = null;
 let currentTotal = 0;
 let overrides = {};       // { [name]: { [day]: mins } } 手動上書き
 let adjustingName = null;
+
+// ===== 時給設定（localStorage）=====
+const WAGE_CONFIG_KEY = 'kotin_wage_config';
+function defaultWageConfig() {
+  const y = new Date().getFullYear();
+  return {
+    default: 400,
+    overrides: {
+      [`${y}-04`]: 350,
+      [`${y}-05`]: 350,
+    },
+  };
+}
+let wageConfig;
+try {
+  const raw = localStorage.getItem(WAGE_CONFIG_KEY);
+  wageConfig = raw ? JSON.parse(raw) : defaultWageConfig();
+} catch {
+  wageConfig = defaultWageConfig();
+}
+if (!wageConfig || typeof wageConfig.default !== 'number' || !wageConfig.overrides) {
+  wageConfig = defaultWageConfig();
+}
+if (!localStorage.getItem(WAGE_CONFIG_KEY)) {
+  localStorage.setItem(WAGE_CONFIG_KEY, JSON.stringify(wageConfig));
+}
+function getWage(year, month) {
+  const key = `${year}-${String(month).padStart(2,'0')}`;
+  return wageConfig.overrides[key] ?? wageConfig.default;
+}
 
 // ===== ファイル読み込み =====
 const dz = document.getElementById('drop-zone');
@@ -462,6 +568,7 @@ function fmtYen(n) {
 // ===== 明細書HTML生成 =====
 function buildStatement(user) {
   const { name, year, month, records } = user;
+  const wage = getWage(year, month);
   const daysInMonth = new Date(year, month, 0).getDate();
   let totalMins = 0, totalAmt = 0;
 
@@ -478,7 +585,7 @@ function buildStatement(user) {
       const endRounded   = roundEndTime15(rec.end);
       const uOvr = overrides[name] || {};
       const mins = (uOvr[d] !== undefined) ? uOvr[d] : calcDayMins(rec);
-      const amt  = Math.round(mins / 60 * WAGE);
+      const amt  = Math.round(mins / 60 * wage);
       totalMins += mins;
       totalAmt  += amt;
       if (mins > 0) {
@@ -518,7 +625,7 @@ function buildStatement(user) {
     <span class="hbox">${month}</span><span>月</span>
     <span class="spacer"></span>
     <span>時給</span>
-    <span class="hbox">${WAGE}</span><span>円</span>
+    <span class="hbox">${wage}</span><span>円</span>
   </div>
   <div class="stmt-name">${name}&nbsp;&nbsp;<span style="font-size:10pt;">様</span></div>
   <table class="stmt-table">
@@ -577,13 +684,14 @@ function calcDayMins(r) {
 
 // ===== 各利用者の工賃計算（共通）=====
 function calcAmt(u) {
+  const wage = getWage(u.year, u.month);
   let totalMins = 0;
   const uOvr = overrides[u.name] || {};
   for (const [dayStr, r] of Object.entries(u.records)) {
     const day = parseInt(dayStr, 10);
     totalMins += (uOvr[day] !== undefined) ? uOvr[day] : calcDayMins(r);
   }
-  return Math.round(totalMins / 60 * WAGE);
+  return Math.round(totalMins / 60 * wage);
 }
 
 // ===== 画面に反映 =====
@@ -955,8 +1063,72 @@ function closeAdjustModal() {
   adjustingName = null;
 }
 
+// ===== 時給設定UI =====
+function toggleWageConfig() {
+  const body  = document.getElementById('wage-config-body');
+  const arrow = document.getElementById('wage-config-arrow');
+  const isOpen = body.style.display !== 'none';
+  body.style.display = isOpen ? 'none' : 'block';
+  arrow.textContent  = isOpen ? '▼' : '▲';
+}
+
+function renderWageConfigUI() {
+  document.getElementById('wage-default').value = wageConfig.default;
+  const list = document.getElementById('wage-overrides-list');
+  const entries = Object.entries(wageConfig.overrides).sort();
+  if (entries.length === 0) {
+    list.innerHTML = '<div class="wage-no-overrides">上書きなし</div>';
+  } else {
+    list.innerHTML = entries.map(([k, v]) => `
+      <div class="wage-override-row">
+        <span class="wo-key">${k}</span>
+        <span class="wo-val">¥${Number(v).toLocaleString('ja-JP')}</span>
+        <button class="btn-remove-wage" onclick="removeWageOverride('${k}')">削除</button>
+      </div>`).join('');
+  }
+}
+
+function addWageOverride() {
+  const monthInput = document.getElementById('wage-add-month').value; // "YYYY-MM"
+  const val = parseInt(document.getElementById('wage-add-value').value, 10);
+  const msg = document.getElementById('wage-msg');
+  if (!/^\d{4}-\d{2}$/.test(monthInput)) {
+    msg.textContent = '年月を入力してなあ'; msg.style.color = '#ff6b6b';
+    return;
+  }
+  if (isNaN(val) || val < 0) {
+    msg.textContent = '時給を正しく入力してなあ'; msg.style.color = '#ff6b6b';
+    return;
+  }
+  wageConfig.overrides[monthInput] = val;
+  document.getElementById('wage-add-month').value = '';
+  document.getElementById('wage-add-value').value = '';
+  msg.textContent = '';
+  renderWageConfigUI();
+}
+
+function removeWageOverride(key) {
+  delete wageConfig.overrides[key];
+  renderWageConfigUI();
+}
+
+function saveWageSettings() {
+  const defaultVal = parseInt(document.getElementById('wage-default').value, 10);
+  const msg = document.getElementById('wage-msg');
+  if (isNaN(defaultVal) || defaultVal < 0) {
+    msg.textContent = 'デフォルト時給を正しく入力してなあ'; msg.style.color = '#ff6b6b';
+    return;
+  }
+  wageConfig.default = defaultVal;
+  localStorage.setItem(WAGE_CONFIG_KEY, JSON.stringify(wageConfig));
+  msg.textContent = '✅ 保存しましたっちゃ'; msg.style.color = '#a9dfbf';
+  if (currentData) render(currentData);
+  renderHistoryList();
+}
+
 // ページ読み込み時に履歴表示
 renderHistoryList();
+renderWageConfigUI();
 </script>
 </body>
 </html>
