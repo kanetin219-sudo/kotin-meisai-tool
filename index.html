@@ -464,6 +464,7 @@ function buildStatement(user) {
   const { name, year, month, records } = user;
   const daysInMonth = new Date(year, month, 0).getDate();
   let totalMins = 0;
+  const dailyAmounts = [];
 
   const trs = [];
   for (let d = 1; d <= daysInMonth; d++) {
@@ -479,13 +480,15 @@ function buildStatement(user) {
       const uOvr = overrides[name] || {};
       const mins = (uOvr[d] !== undefined) ? uOvr[d] : calcDayMins(rec);
       totalMins += mins;
+      const dayAmt = Math.round(mins / 60 * WAGE);
+      dailyAmounts.push(dayAmt);
       if (mins > 0) {
         cols = `
           <td>${startSnapped}</td>
           <td>${endRounded}</td>
           <td>${rec.brk}</td>
           <td class="r">${fmtHours(mins)}</td>
-          <td class="r">${fmtYen(Math.round(mins / 60 * WAGE))}</td>
+          <td class="r">${fmtYen(dayAmt)}</td>
           <td></td>`;
       } else {
         cols = `
@@ -493,6 +496,7 @@ function buildStatement(user) {
           <td class="r dim">0.0</td>
           <td class="r dim">¥0</td>
           <td></td>`;
+        dailyAmounts.pop();
       }
     } else {
       cols = `
@@ -506,7 +510,7 @@ function buildStatement(user) {
   }
 
   const totalHoursStr = fmtHours(totalMins);
-  const totalAmt = Math.round(totalMins / 60 * WAGE);
+  const totalAmt = dailyAmounts.reduce((sum, amt) => sum + amt, 0);
   const totalAmtStr   = fmtYen(totalAmt);
 
   return `
@@ -575,9 +579,9 @@ function calcDayMins(r) {
 }
 
 // ===== 各利用者の工賃計算（共通）=====
-function calcAmt(u) {
+function calcAmt(u, ovr) {
   let totalMins = 0;
-  const uOvr = overrides[u.name] || {};
+  const uOvr = (ovr || {})[u.name] || {};
   for (const [dayStr, r] of Object.entries(u.records)) {
     const day = parseInt(dayStr, 10);
     totalMins += (uOvr[day] !== undefined) ? uOvr[day] : calcDayMins(r);
@@ -594,7 +598,7 @@ function render({ users, order }) {
   const amts = {};
   currentTotal = 0;
   for (const n of order) {
-    amts[n] = calcAmt(users[n]);
+    amts[n] = calcAmt(users[n], overrides);
     currentTotal += amts[n];
   }
 
@@ -731,8 +735,14 @@ async function saveCurrentToHistory() {
   const key = `${year}-${String(month).padStart(2, '0')}`;
   const savedAt = new Date().toLocaleDateString('ja-JP');
 
+  // 保存対象月を保存し、その月の手修正だけを保存
+  const saveOverrides = {};
+  for (const name in overrides) {
+    saveOverrides[name] = overrides[name];
+  }
+
   const { error } = await db.from('kotin_history').upsert({
-    id: key, year, month, saved_at: savedAt, data: { users, order, overrides }
+    id: key, year, month, saved_at: savedAt, data: { users, order, overrides: saveOverrides }
   });
 
   if (error) {
@@ -754,7 +764,7 @@ async function renderHistoryList() {
   }
 
   container.innerHTML = data.map(h => {
-    const total = h.data.order.reduce((sum, n) => sum + calcAmt(h.data.users[n]), 0);
+    const total = h.data.order.reduce((sum, n) => sum + calcAmt(h.data.users[n], h.data.overrides), 0);
     return `
     <div class="hist-card">
       <div class="hinfo">
@@ -815,7 +825,7 @@ async function importHistory(input) {
       const imported = JSON.parse(e.target.result);
       const rows = Object.entries(imported).map(([id, h]) => ({
         id, year: h.year, month: h.month, saved_at: h.savedAt,
-        data: { users: h.users, order: h.order }
+        data: { users: h.users, order: h.order, overrides: h.overrides || {} }
       }));
       const { error } = await db.from('kotin_history').upsert(rows);
       if (error) throw error;
