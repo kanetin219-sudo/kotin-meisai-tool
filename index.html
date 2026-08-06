@@ -255,6 +255,7 @@ body { background: #eef2f7; font-family: 'Hiragino Kaku Gothic ProN', 'Meiryo', 
     <button class="btn-orange" onclick="document.getElementById('import-file').click()">📥 履歴をインポート</button>
     <input type="file" id="import-file" accept=".json" onchange="importHistory(this)">
     <button class="btn-orange" onclick="migrateFromLocalStorage()" id="btn-migrate" title="このブラウザに残っている旧データをクラウドへ移行">🔄 旧データを移行</button>
+    <button class="btn-orange" onclick="initBackupTable()" id="btn-init-backup" title="バックアップテーブルを初期化">🛡️ バックアップ初期化</button>
     <span id="transfer-msg"></span>
   </div>
 </div>
@@ -741,6 +742,38 @@ async function saveCurrentToHistory() {
     saveOverrides[name] = overrides[name];
   }
 
+  // 1. 現在のレコードを取得（バックアップ用）
+  const { data: existing, error: fetchError } = await db.from('kotin_history').select('*').eq('id', key).single();
+
+  if (fetchError && fetchError.code !== 'PGRST116') {
+    document.getElementById('save-msg').textContent = 'データ取得エラーっちゃ: ' + fetchError.message;
+    return;
+  }
+
+  // 2. 既存データがあれば、バックアップに保存
+  if (existing) {
+    const newAmt = order.reduce((sum, n) => sum + calcAmt(users[n], saveOverrides), 0);
+    const oldAmt = existing.data.order.reduce((sum, n) => sum + calcAmt(existing.data.users[n], existing.data.overrides), 0);
+
+    // 金額が変わる場合は確認
+    if (newAmt !== oldAmt) {
+      const confirmed = confirm(
+        `${year}年${month}月の月合計が変わります。\n\n` +
+        `変更前: ¥${oldAmt.toLocaleString()}\n` +
+        `変更後: ¥${newAmt.toLocaleString()}\n` +
+        `差額: ${newAmt > oldAmt ? '+' : ''}¥${(newAmt - oldAmt).toLocaleString()}\n\n` +
+        `このまま保存しますか？`
+      );
+      if (!confirmed) return;
+    }
+
+    // バックアップを保存
+    await db.from('kotin_history_backup').insert({
+      history_id: key, year, month, data: existing.data
+    });
+  }
+
+  // 3. メインテーブルに保存
   const { error } = await db.from('kotin_history').upsert({
     id: key, year, month, saved_at: savedAt, data: { users, order, overrides: saveOverrides }
   });
@@ -864,6 +897,34 @@ async function migrateFromLocalStorage() {
   } catch (e) {
     document.getElementById('transfer-msg').textContent = '移行エラーっちゃ: ' + e.message;
   }
+}
+
+// ===== バックアップテーブル初期化 =====
+async function initBackupTable() {
+  const msg = document.getElementById('transfer-msg');
+  msg.textContent = 'バックアップテーブルを確認中...';
+
+  const { data, error } = await db.from('kotin_history_backup').select('id').limit(1);
+
+  if (!error && data !== null) {
+    msg.textContent = '✅ バックアップテーブルは初期化済みっちゃ！';
+    return;
+  }
+
+  msg.innerHTML = `⚠️ バックアップテーブルが見つかりません。<br>以下の SQL を Supabase 管理画面で実行してください：<br><br>
+  <code style="background:#f0f0f0;padding:8px;display:block;white-space:pre-wrap;word-wrap:break-word;font-size:11px;">
+create table if not exists kotin_history_backup (
+  id bigserial primary key,
+  history_id text not null,
+  year int, month int,
+  data jsonb not null,
+  backed_up_at timestamptz not null default now()
+);
+create index idx_kotin_backup_hist on kotin_history_backup (history_id, backed_up_at desc);
+alter table kotin_history_backup enable row level security;
+create policy "backup_select" on kotin_history_backup for select using (true);
+create policy "backup_insert" on kotin_history_backup for insert with check (true);
+  </code>`;
 }
 
 // ===== 収支表（anella_monthly_finance）へ工賃合計を反映 =====
