@@ -602,13 +602,17 @@ function calcDayMins(r) {
 
 // ===== 各利用者の工賃計算（共通）=====
 function calcAmt(u, ovr) {
-  let totalMins = 0;
+  let total = 0;
   const uOvr = (ovr || {})[u.name] || {};
   for (const [dayStr, r] of Object.entries(u.records)) {
     const day = parseInt(dayStr, 10);
-    totalMins += (uOvr[day] !== undefined) ? uOvr[day] : calcDayMins(r);
+    const mins = (uOvr[day] !== undefined) ? uOvr[day] : calcDayMins(r);
+    // 明細書と同じく「1日ごとに丸めてから合計」する。
+    // 先に分を合計して最後に1回だけ丸めると、明細書の日別金額の合計と
+    // 数円ずれてしまうため（時給350円=15分87.5円で端数が出る）。
+    total += Math.round(mins / 60 * WAGE);
   }
-  return Math.round(totalMins / 60 * WAGE);
+  return total;
 }
 
 // ===== 画面に反映 =====
