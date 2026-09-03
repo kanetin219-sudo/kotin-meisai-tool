@@ -306,6 +306,17 @@ const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 let currentData = null;
 let currentTotal = 0;
 let overrides = {};       // { [name]: { [day]: mins } } 手動上書き
+let deductions = {};      // { [name]: 円 } 利用者負担金（工賃から差し引く）
+
+// ===== 利用者負担金 =====
+function getDeduction(name) { return deductions[name] || 0; }
+
+// 工賃総額（差引前）
+function grossAmt(u, ovr) { return calcAmt(u, ovr); }
+// 差引支給額（負担金を引いたあと。マイナスにはしない）
+function netAmt(u, ovr, ded) {
+  return Math.max(0, calcAmt(u, ovr) - (ded || 0));
+}
 let adjustingName = null;
 
 // ===== ファイル読み込み =====
@@ -513,6 +524,7 @@ function buildStatement(user) {
   const totalHoursStr = fmtHours(totalMins);
   const totalAmt = dailyAmounts.reduce((sum, amt) => sum + amt, 0);
   const totalAmtStr   = fmtYen(totalAmt);
+  const ded = getDeduction(name);
 
   return `
 <div class="stmt">
@@ -554,6 +566,15 @@ function buildStatement(user) {
       <td class="lbl">工賃総額（円）</td>
       <td class="val" colspan="2">${totalAmtStr}</td>
     </tr>
+    ${ded > 0 ? `
+    <tr>
+      <td class="lbl">利用者負担金（円）</td>
+      <td class="val" colspan="2">-${fmtYen(ded)}</td>
+    </tr>
+    <tr class="total-row">
+      <td class="lbl">差引支給額（円）</td>
+      <td class="val" colspan="2">${fmtYen(Math.max(0, totalAmt - ded))}</td>
+    </tr>` : ''}
   </table>
   <div class="cert">上記の通り相違ないことを証明します。</div>
   <div class="footer-info">
@@ -595,30 +616,44 @@ function render({ users, order }) {
   const sample = users[order[0]];
   const { year, month } = sample;
 
-  // 個別金額と合計を計算
-  const amts = {};
+  // 個別金額と合計を計算（amts=工賃総額 / nets=負担金を引いた支給額）
+  const amts = {}, nets = {};
   currentTotal = 0;
   for (const n of order) {
     amts[n] = calcAmt(users[n], overrides);
-    currentTotal += amts[n];
+    nets[n] = Math.max(0, amts[n] - getDeduction(n));
+    currentTotal += nets[n];   // 会計連携は差引後の金額を使う
   }
 
   // 印刷用：明細書＋月合計サマリページ
   document.getElementById('statements').innerHTML =
     order.map(n => buildStatement(users[n])).join('') +
-    buildSummaryPage(year, month, order, amts, currentTotal);
+    buildSummaryPage(year, month, order, amts, nets, currentTotal);
 
   // 画面カード
-  const cards = order.map(n =>
-    `<div class="card">
+  const cards = order.map(n => {
+    const esc = n.replace(/'/g, "\\'");
+    const ded = getDeduction(n);
+    return `<div class="card">
       <span class="uname">${n}</span>
       <span class="uamt">工賃総額: ${fmtYen(amts[n])}</span>
-      <button class="btn-adjust" onclick="openAdjustModal('${n.replace(/'/g, "\\'")}')">✏️ 修正</button>
-    </div>`
-  ).join('');
+      <span style="display:flex;align-items:center;gap:4px;font-size:13px;color:#555;">
+        負担金
+        <input type="number" min="0" step="1" value="${ded || ''}" placeholder="0"
+          onchange="setDeduction('${esc}', this.value)"
+          style="width:88px;padding:4px 6px;border:1px solid #bbb;border-radius:4px;text-align:right;font-size:13px;">
+        円
+      </span>
+      <span class="uamt" style="color:${ded > 0 ? '#c0392b' : '#888'};">支給額: ${fmtYen(nets[n])}</span>
+      <button class="btn-adjust" onclick="openAdjustModal('${esc}')">✏️ 修正</button>
+    </div>`;
+  }).join('');
 
+  const totalGross = order.reduce((sum, n) => sum + amts[n], 0);
+  const totalDed   = order.reduce((sum, n) => sum + getDeduction(n), 0);
   const totalCard = `<div class="card" style="background:#1a5276;color:white;margin-top:8px;">
     <span class="uname" style="color:white;">月合計</span>
+    ${totalDed > 0 ? `<span style="color:#d5dbdb;font-size:13px;">工賃 ${fmtYen(totalGross)} − 負担金 ${fmtYen(totalDed)}</span>` : ''}
     <span class="uamt" style="color:#f9e79f;font-size:16px;font-weight:bold;">${fmtYen(currentTotal)}</span>
   </div>`;
 
@@ -630,27 +665,41 @@ function render({ users, order }) {
   setStatus(`✅ ${order.length}名分を生成しました。月合計: ${fmtYen(currentTotal)}`);
 }
 
+// ===== 利用者負担金の入力 =====
+function setDeduction(name, value) {
+  const v = Math.max(0, Math.round(parseFloat(value) || 0));
+  if (v > 0) deductions[name] = v; else delete deductions[name];
+  render(currentData);   // 金額・明細書を作り直す
+}
+
 // ===== 月合計サマリページ（印刷用）=====
-function buildSummaryPage(year, month, order, amts, total) {
+function buildSummaryPage(year, month, order, amts, nets, total) {
+  const anyDed = order.some(n => getDeduction(n) > 0);
   const rows = order.map(n =>
-    `<tr><td style="text-align:left;padding:3px 8px;">${n}</td><td style="text-align:right;padding:3px 8px;">${fmtYen(amts[n])}</td></tr>`
+    anyDed
+      ? `<tr><td style="text-align:left;padding:3px 8px;">${n}</td><td style="text-align:right;padding:3px 8px;">${fmtYen(amts[n])}</td><td style="text-align:right;padding:3px 8px;">${getDeduction(n) ? '-' + fmtYen(getDeduction(n)) : ''}</td><td style="text-align:right;padding:3px 8px;">${fmtYen(nets[n])}</td></tr>`
+      : `<tr><td style="text-align:left;padding:3px 8px;">${n}</td><td style="text-align:right;padding:3px 8px;">${fmtYen(amts[n])}</td></tr>`
   ).join('');
+  const totalGross = order.reduce((sum, n) => sum + amts[n], 0);
+  const totalDed   = order.reduce((sum, n) => sum + getDeduction(n), 0);
   return `
 <div class="stmt" style="font-family:'Hiragino Kaku Gothic ProN','Meiryo',sans-serif;">
   <div class="stmt-title" style="margin-bottom:8mm;">工賃支払一覧</div>
   <div style="text-align:center;font-size:13pt;margin-bottom:6mm;">${year}年${month}月分</div>
-  <table style="width:60%;margin:0 auto;border-collapse:collapse;font-size:10pt;">
+  <table style="width:${anyDed ? '85%' : '60%'};margin:0 auto;border-collapse:collapse;font-size:10pt;">
     <thead>
       <tr style="background:#efefef;">
         <th style="border:0.5pt solid #000;padding:4px 8px;text-align:left;">氏名</th>
         <th style="border:0.5pt solid #000;padding:4px 8px;text-align:right;">工賃</th>
+        ${anyDed ? '<th style="border:0.5pt solid #000;padding:4px 8px;text-align:right;">利用者負担金</th><th style="border:0.5pt solid #000;padding:4px 8px;text-align:right;">差引支給額</th>' : ''}
       </tr>
     </thead>
     <tbody>
       ${rows}
       <tr style="font-weight:bold;font-size:11pt;border-top:1pt solid #000;">
         <td style="border:0.5pt solid #000;padding:5px 8px;text-align:left;background:#efefef;">合計</td>
-        <td style="border:0.5pt solid #000;padding:5px 8px;text-align:right;background:#efefef;">${fmtYen(total)}</td>
+        <td style="border:0.5pt solid #000;padding:5px 8px;text-align:right;background:#efefef;">${fmtYen(anyDed ? totalGross : total)}</td>
+        ${anyDed ? `<td style="border:0.5pt solid #000;padding:5px 8px;text-align:right;background:#efefef;">-${fmtYen(totalDed)}</td><td style="border:0.5pt solid #000;padding:5px 8px;text-align:right;background:#efefef;">${fmtYen(total)}</td>` : ''}
       </tr>
     </tbody>
   </table>
@@ -752,8 +801,9 @@ async function saveCurrentToHistory() {
 
   // 2. 既存データがあれば、バックアップに保存
   if (existing) {
-    const newAmt = order.reduce((sum, n) => sum + calcAmt(users[n], saveOverrides), 0);
-    const oldAmt = existing.data.order.reduce((sum, n) => sum + calcAmt(existing.data.users[n], existing.data.overrides), 0);
+    const oldDed = existing.data.deductions || {};   // 過去データに無ければ負担金なし扱い
+    const newAmt = order.reduce((sum, n) => sum + Math.max(0, calcAmt(users[n], saveOverrides) - (deductions[n] || 0)), 0);
+    const oldAmt = existing.data.order.reduce((sum, n) => sum + Math.max(0, calcAmt(existing.data.users[n], existing.data.overrides) - (oldDed[n] || 0)), 0);
 
     // 金額が変わる場合は確認
     if (newAmt !== oldAmt) {
@@ -775,7 +825,7 @@ async function saveCurrentToHistory() {
 
   // 3. メインテーブルに保存
   const { error } = await db.from('kotin_history').upsert({
-    id: key, year, month, saved_at: savedAt, data: { users, order, overrides: saveOverrides }
+    id: key, year, month, saved_at: savedAt, data: { users, order, overrides: saveOverrides, deductions }
   });
 
   if (error) {
@@ -797,7 +847,8 @@ async function renderHistoryList() {
   }
 
   container.innerHTML = data.map(h => {
-    const total = h.data.order.reduce((sum, n) => sum + calcAmt(h.data.users[n], h.data.overrides), 0);
+    const hDed = h.data.deductions || {};   // 過去データに無ければ負担金なし扱い
+    const total = h.data.order.reduce((sum, n) => sum + Math.max(0, calcAmt(h.data.users[n], h.data.overrides) - (hDed[n] || 0)), 0);
     return `
     <div class="hist-card">
       <div class="hinfo">
@@ -818,6 +869,7 @@ async function loadHistory(key) {
   if (error || !data) return;
   currentData = { users: data.data.users, order: data.data.order };
   overrides = data.data.overrides || {};
+  deductions = data.data.deductions || {};   // 過去データには無いので空でOK
   document.getElementById('save-msg').textContent = '';
   render(currentData);
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -858,7 +910,7 @@ async function importHistory(input) {
       const imported = JSON.parse(e.target.result);
       const rows = Object.entries(imported).map(([id, h]) => ({
         id, year: h.year, month: h.month, saved_at: h.savedAt,
-        data: { users: h.users, order: h.order, overrides: h.overrides || {} }
+        data: { users: h.users, order: h.order, overrides: h.overrides || {}, deductions: h.deductions || {} }
       }));
       const { error } = await db.from('kotin_history').upsert(rows);
       if (error) throw error;
