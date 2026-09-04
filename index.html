@@ -528,6 +528,10 @@ function buildStatement(user) {
   const totalAmt = Math.round(totalMins / 60 * WAGE);
   const totalAmtStr   = fmtYen(totalAmt);
   const ded = getDeduction(name);
+  // 工賃は翌月払いのため、証明日は対象月の翌月20日にする（収支表への連携と同じ考え方）
+  const payDate  = new Date(year, month, 1); // month は1始まりなので、これで翌月になる
+  const payYear  = payDate.getFullYear();
+  const payMonth = payDate.getMonth() + 1;
 
   return `
 <div class="stmt">
@@ -581,7 +585,7 @@ function buildStatement(user) {
   </table>
   <div class="cert">上記の通り相違ないことを証明します。</div>
   <div class="footer-info">
-    ${year}　年　${month}　月　20　日<br>
+    ${payYear}　年　${payMonth}　月　20　日<br>
     所在地：${ADDR}<br>
     施設・事業所名：${FACILITY}<br>
     施設長・事業所長：${DIRECTOR}
